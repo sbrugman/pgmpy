@@ -183,7 +183,7 @@ class TreeSearch(StructureEstimator):
 
     @staticmethod
     def chow_liu(
-        data, root_node, edge_weights_fn="mutual_info", n_jobs=-1, show_progress=True, return_weights=False
+        data, root_node, edge_weights_fn="mutual_info", n_jobs=-1, show_progress=True
     ):
         """
         Chow-Liu algorithm for estimating tree structure from given data. Refer to
