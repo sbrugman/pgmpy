@@ -111,7 +111,7 @@ class TreeSearch(StructureEstimator):
         >>> plt.show()
         """
         # Step 1. Argument checks
-        if estimator_type not in {"chow-liu", "tan"}:
+        if estimator_type not in {"chow-liu", "tan", "auto-tan", "auto-cl"}:
             raise ValueError(
                 f"Invalid estimator_type. Expected either chow-liu or tan. Got: {self.return_type}"
             )
@@ -127,7 +127,7 @@ class TreeSearch(StructureEstimator):
 
             # Step 3.1: Checks for class_node and root_node != class_node
             if class_node is None:
-                raise ValueError("class_node must be specified for estimator_type=tiu")
+                raise ValueError("class_node must be specified for estimator_type=tan")
 
             elif class_node not in self.data.columns:
                 raise ValueError(f"Class node: {class_node} not found in data columns")
@@ -145,12 +145,45 @@ class TreeSearch(StructureEstimator):
 
             # Step 3.3: Add edges from class_node to all other nodes.
             D.add_edges_from([(class_node, node) for node in df_features.columns])
+            return D
+
+        # Step 4: If estimator_type = "auto-cl":
+        elif estimator_type == "auto-cl":
+            # sum weights per column, and find location of max values
+            weights = TreeSearch._get_weights(self.data, edge_weights_fn, self.n_jobs, show_progress)
+            sum_w = weights.sum(axis=1)
+            maxw_idx = np.argsort(sum_w)[::-1][0]
+            root_node = self.data.columns[maxw_idx]
+            return TreeSearch._create_tree_and_dag(weights, self.data.columns, root_node)
+
+        # Step 5: If estimator_type = "auto-tan":
+        elif estimator_type == "auto-tan":
+            # sum weights per column, and find location of max values
+            weights = TreeSearch._get_weights(self.data, edge_weights_fn, self.n_jobs, show_progress)
+            sum_w = weights.sum(axis=0)
+            maxw_idx = np.argsort(sum_w)[::-1][:2]
+
+            max2_idx = maxw_idx[1]
+            max1_idx = maxw_idx[0]
+
+            columns = self.data.columns.to_numpy()
+            class_node = columns[max2_idx]  # assign 2nd max weight sum as class node
+            root_node = columns[max1_idx]   # assign max weight sum as root node
+
+            # remove class-node from weights
+            weights = np.delete(weights, max2_idx, axis=0)
+            weights = np.delete(weights, max2_idx, axis=1)
+            reduced_columns = np.delete(columns, max2_idx)
+
+            D = TreeSearch._create_tree_and_dag(weights, reduced_columns, root_node)
+            # Step: Add edges from class_node to all other nodes.
+            D.add_edges_from([(class_node, node) for node in reduced_columns])
 
             return D
 
     @staticmethod
     def chow_liu(
-        data, root_node, edge_weights_fn="mutual_info", n_jobs=-1, show_progress=True
+        data, root_node, edge_weights_fn="mutual_info", n_jobs=-1, show_progress=True, return_weights=False
     ):
         """
         Chow-Liu algorithm for estimating tree structure from given data. Refer to
@@ -192,10 +225,17 @@ class TreeSearch(StructureEstimator):
         >>> est = TreeSearch(values, root_node='B')
         >>> model = est.estimate(estimator_type='chow-liu')
         """
+        weights = TreeSearch._get_weights(data, edge_weights_fn, n_jobs, show_progress)
+        return TreeSearch._create_tree_and_dag(weights, data.columns, root_node)
+
+    @staticmethod
+    def _get_weights(data, edge_weights_fn = "mutual_info", n_jobs = -1, show_progress = True):
+        """Helper function chow_liu method
+        """
         # Step 0: Check for edge weight computation method
         if edge_weights_fn == "mutual_info":
             edge_weights_fn = mutual_info_score
-        elif not isinstance(edge_weights_fn, callable):
+        elif not callable(edge_weights_fn):
             raise ValueError(
                 f"edge_weights_fn should either be 'mutual_info', 'adjusted_mutual_info', "
                 f"'normalized_mutual_info'or a function of form fun(array, array). Got: f{edge_weights_fn}"
@@ -217,10 +257,16 @@ class TreeSearch(StructureEstimator):
         weights = np.zeros((n_vars, n_vars))
         weights[np.triu_indices(n_vars, k=1)] = vals
 
+        return weights
+
+    @staticmethod
+    def _create_tree_and_dag(weights, columns, root_node):
+        """Helper function chow_liu method
+        """
         # Step 2: Compute the maximum spanning tree using the weights.
         T = nx.maximum_spanning_tree(
             nx.from_pandas_adjacency(
-                pd.DataFrame(weights, index=data.columns, columns=data.columns),
+                pd.DataFrame(weights, index=columns, columns=columns),
                 create_using=nx.Graph,
             )
         )
